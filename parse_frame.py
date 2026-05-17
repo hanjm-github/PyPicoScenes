@@ -1,7 +1,10 @@
 import struct
+import os
+
+os.environ.setdefault("PYPICOSCENES_CORE_ONLY", "1")
+
 import numpy as np
 from PyPicoScenes.PyPicoScenes import *
-import os
 
 def parseCSIFile(filename: str = "", pos: int = 0, num: int = 0):
     res = []

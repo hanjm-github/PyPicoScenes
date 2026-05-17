@@ -1,133 +1,221 @@
-import cppyy
-import cppyy.ll
+import os
 import subprocess
 import sys
+import sysconfig
+import warnings
 
-if sys.platform.startswith("linux"):
-    cppyy.add_library_path("/usr/local/PicoScenes/lib/")
-elif sys.platform.startswith('win32'):
-    cppyy.add_library_path("C:\\Program Files\\PicoScenes\\lib")
-else:
-    raise RuntimeError("Please add PicoScenes lib path here!")
-
-cppyy.load_library("libServer")
-cppyy.load_library("libmac80211Injection")
-cppyy.load_library("libDSP")
-cppyy.load_library("libFrontEnd")
-cppyy.load_library("libIntrinsics")
-cppyy.load_library("libLicense")
-cppyy.load_library("libmac80211Injection")
-cppyy.load_library("libNICHAL")
-cppyy.load_library("librxs_parsing")
-cppyy.load_library("libSDRBaseband")
-cppyy.load_library("libSodiumWrapper")
-cppyy.load_library("libSystemTools")
+_CPPYY_REAL_API_INCLUDE_DIR = None
 
 
-if sys.platform.startswith("linux"):
-    cppyy.add_library_path("/usr/local/PicoScenes/include/")
-elif sys.platform.startswith('win32'):
-    cppyy.add_library_path("C:\\Program Files\\PicoScenes\\include")
-else:
-    raise RuntimeError("Please add PicoScenes include path here!")
+def _configure_cppyy_api_path():
+    global _CPPYY_REAL_API_INCLUDE_DIR
 
-cppyy.include("PicoScenes/PyPicoScenes.hxx")
+    candidate_dirs = [
+        sysconfig.get_path("include"),
+        os.path.join(
+            sys.prefix,
+            "include",
+            f"python{sys.version_info.major}.{sys.version_info.minor}",
+        ),
+    ]
 
-cppyy.include("cstdint")
-cppyy.include("exception")
-cppyy.include("queue")
-cppyy.include("atomic")
-cppyy.include("condition_variable")
+    for include_dir in candidate_dirs:
+        if not include_dir:
+            continue
 
-## include CSILivePlotter.hxx
-cppyy.include("PicoScenes/CSILivePlotter.hxx")
-cppyy.include("PicoScenes/SDRExtraSegment.hxx")
-cppyy.include("PicoScenes/PicoScenesFrameTxParameters.hxx")
-cppyy.include("PicoScenes/MVMExtraSegment.hxx")
-cppyy.include("PicoScenes/UDPService.hxx")
-cppyy.include("PicoScenes/LicenseModel.hxx")
-cppyy.include("PicoScenes/LoggingService.hxx")
-cppyy.include("PicoScenes/PayloadSegment.hxx")
-cppyy.include("PicoScenes/AbstractPicoScenesFrameSegment.hxx")
-cppyy.include("PicoScenes/LicenseService.hxx")
-cppyy.include("PicoScenes/RxSBasicSegment.hxx")
-cppyy.include("PicoScenes/IntelRateNFlag.hxx")
-cppyy.include("PicoScenes/ExtraInfoSegment.hxx")
-cppyy.include("PicoScenes/SignalMatrix.hxx")
-cppyy.include("PicoScenes/PicoScenesCommons.hxx")
-cppyy.include("PicoScenes/FrontEndModePreset.hxx")
-cppyy.include("PicoScenes/FrameDumper.hxx")
-cppyy.include("PicoScenes/TaggedThreadPool.hxx")
-cppyy.include("PicoScenes/SDRFrontEndConfigurations.hxx")
-cppyy.include("PicoScenes/CSISegment.hxx")
-cppyy.include("PicoScenes/BasebandSignalSegment.hxx")
-cppyy.include("PicoScenes/FrontEndConfigurations.hxx")
-cppyy.include("PicoScenes/Singleton.hxx")
-cppyy.include("PicoScenes/CargoSegment.hxx")
-cppyy.include("PicoScenes/DynamicFieldInterpretation.hxx")
-cppyy.include("PicoScenes/FIFOWaitBlocker.hxx")
-cppyy.include("PicoScenes/SDRHardwareInformation.hxx")
-cppyy.include("PicoScenes/Intrinsics.hxx")
-cppyy.include("PicoScenes/SoapySDRUtils.hxx")
+        upper_api = os.path.join(include_dir, "CPyCppyy", "API.h")
+        lower_api = os.path.join(include_dir, "CpyCppyy", "API.h")
+        if os.path.exists(upper_api):
+            _CPPYY_REAL_API_INCLUDE_DIR = include_dir
+            return include_dir
+        if os.path.exists(lower_api):
+            _CPPYY_REAL_API_INCLUDE_DIR = include_dir
+            return os.path.join(os.path.dirname(__file__), "_cppyy_api_compat")
+
+    return None
+
+
+if "CPPYY_API_PATH" not in os.environ:
+    _cppyy_api_path = _configure_cppyy_api_path()
+    if _cppyy_api_path:
+        os.environ["CPPYY_API_PATH"] = _cppyy_api_path
+        warnings.filterwarnings(
+            "ignore",
+            message="CPyCppyy API not found.*",
+            category=UserWarning,
+            module="cppyy",
+        )
+
+import cppyy
+import cppyy.ll
+
+
+def _picoscenes_paths():
+    if sys.platform.startswith("linux"):
+        root = os.environ.get("PICOSCENES_ROOT", "/usr/local/PicoScenes")
+        lib_dir = os.environ.get("PICOSCENES_LIB_DIR", os.path.join(root, "pslib"))
+        if not os.path.isdir(lib_dir):
+            lib_dir = os.path.join(root, "lib")
+    elif sys.platform.startswith("win32"):
+        root = os.environ.get("PICOSCENES_ROOT", "C:\\Program Files\\PicoScenes")
+        lib_dir = os.environ.get("PICOSCENES_LIB_DIR", os.path.join(root, "lib"))
+    else:
+        raise RuntimeError("Please add PicoScenes lib/include paths here.")
+
+    include_dir = os.environ.get("PICOSCENES_INCLUDE_DIR", os.path.join(root, "include"))
+    return lib_dir, include_dir
+
+
+_PICOSCENES_LIB_DIR, _PICOSCENES_INCLUDE_DIR = _picoscenes_paths()
+cppyy.add_library_path(_PICOSCENES_LIB_DIR)
+cppyy.add_include_path(_PICOSCENES_INCLUDE_DIR)
+if _CPPYY_REAL_API_INCLUDE_DIR:
+    cppyy.add_include_path(_CPPYY_REAL_API_INCLUDE_DIR)
+
+for _library in (
+    "libServer",
+    "libmac80211Injection",
+    "libDSP",
+    "libFrontEnd",
+    "libIntrinsics",
+    "libLicense",
+    "libNICHAL",
+    "librxs_parsing",
+    "libSDRBaseband",
+    "libSodiumWrapper",
+    "libSystemTools",
+):
+    cppyy.load_library(_library)
+
+for _header in ("cstdint", "exception", "queue", "atomic", "condition_variable"):
+    cppyy.include(_header)
+
+# Conda's Boost.Asio headers default to header-only mode, which makes Cling
+# parse implementation details that it cannot legally access. PicoScenes ships
+# the compiled Boost symbols, so keep Asio declarations separate for cppyy.
+cppyy.cppdef("""
+#ifndef BOOST_ASIO_SEPARATE_COMPILATION
+#define BOOST_ASIO_SEPARATE_COMPILATION 1
+#endif
+""")
+
+# CSI-file parsing only needs this frame definition. Keep it independent from
+# the full runtime headers so parse_frame.py works even when Boost headers from
+# the active Python environment are incompatible with cppyy/Cling.
 cppyy.include("PicoScenes/ModularPicoScenesFrame.hxx")
-cppyy.include("PicoScenes/RXSExtraInfo.hxx")
-cppyy.include("PicoScenes/BBSignalsFileWriter.hxx")
-cppyy.include("PicoScenes/DSPRateTracker.hxx")
-cppyy.include("PicoScenes/AbstractSDRFrontEnd.hxx")
-cppyy.include("PicoScenes/MAC80211CSIExtractableFrontEnd.hxx")
 
 std = cppyy.gbl.std
-ChannelBandwidthEnum = cppyy.gbl.ChannelBandwidthEnum
-LoggingService = cppyy.gbl.LoggingService
-AbstractSDRFrontEnd = cppyy.gbl.AbstractSDRFrontEnd
 uint16_t = cppyy.gbl.uint16_t
 ModularPicoScenesRxFrame = cppyy.gbl.ModularPicoScenesRxFrame
-FrontEndModePreset = cppyy.gbl.FrontEndModePreset
-PacketFormatEnum = cppyy.gbl.PacketFormatEnum
-GuardIntervalEnum = cppyy.gbl.GuardIntervalEnum
-PicoScenesFrameTxParameters = cppyy.gbl.PicoScenesFrameTxParameters
-MagicIntel123456 = cppyy.gbl.MagicIntel123456
-TxPrecodingParameters = cppyy.gbl.TxPrecodingParameters
-ExtraInfoSegment = cppyy.gbl.ExtraInfoSegment
-PicoScenesDeviceType = cppyy.gbl.PicoScenesDeviceType
-isIntelMVMTypeNIC = cppyy.gbl.isIntelMVMTypeNIC
-ChannelCodingEnum = cppyy.gbl.ChannelCodingEnum
-PayloadDataType = cppyy.gbl.PayloadDataType
-PayloadSegment = cppyy.gbl.PayloadSegment
-isSDR = cppyy.gbl.isSDR
-MAC80211CSIExtractableFrontEnd = cppyy.gbl.MAC80211CSIExtractableFrontEnd
-## plot
-CSILivePlotter = cppyy.gbl.CSILivePlotter
 
-PicoScenesStart = cppyy.gbl.PicoScenesStart
-PicoScenesWait = cppyy.gbl.PicoScenesWait
-PicoScenesStop = cppyy.gbl.PicoScenesStop
-getNIC = cppyy.gbl.getNIC
 
-def picoscenes_start(commandString:str = None):
-    proc = subprocess.Popen(
-        ["PicoScenes", "-q"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+def _export_if_available(name):
     try:
-        stdout, stderr = proc.communicate(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    PicoScenesStart()
+        globals()[name] = getattr(cppyy.gbl, name)
+    except AttributeError:
+        pass
 
-def picoscenes_wait():
-    PicoScenesWait()
 
-def picoscenes_stop():
-    PicoScenesStop()
+for _name in (
+    "ChannelBandwidthEnum",
+    "PacketFormatEnum",
+    "GuardIntervalEnum",
+    "PicoScenesFrameTxParameters",
+    "MagicIntel123456",
+    "TxPrecodingParameters",
+    "ExtraInfoSegment",
+    "PicoScenesDeviceType",
+    "ChannelCodingEnum",
+    "PayloadDataType",
+    "PayloadSegment",
+    "isSDR",
+):
+    _export_if_available(_name)
 
-def getNic(nicName):
-    nic = getNIC(nicName)
-    return nic
 
-cppyy.cppdef("""
+_FULL_BINDINGS_ERROR = None
+_FULL_BINDINGS_LOADED = False
+
+
+def _load_full_bindings():
+    cppyy.include("PicoScenes/PyPicoScenes.hxx")
+
+    required_headers = (
+        "PicoScenes/SDRExtraSegment.hxx",
+        "PicoScenes/PicoScenesFrameTxParameters.hxx",
+        "PicoScenes/MVMExtraSegment.hxx",
+        "PicoScenes/UDPService.hxx",
+        "PicoScenes/LicenseModel.hxx",
+        "PicoScenes/LoggingService.hxx",
+        "PicoScenes/PayloadSegment.hxx",
+        "PicoScenes/AbstractPicoScenesFrameSegment.hxx",
+        "PicoScenes/LicenseService.hxx",
+        "PicoScenes/RxSBasicSegment.hxx",
+        "PicoScenes/IntelRateNFlag.hxx",
+        "PicoScenes/ExtraInfoSegment.hxx",
+        "PicoScenes/SignalMatrix.hxx",
+        "PicoScenes/PicoScenesCommons.hxx",
+        "PicoScenes/FrontEndModePreset.hxx",
+        "PicoScenes/FrameDumper.hxx",
+        "PicoScenes/TaggedThreadPool.hxx",
+        "PicoScenes/SDRFrontEndConfigurations.hxx",
+        "PicoScenes/CSISegment.hxx",
+        "PicoScenes/BasebandSignalSegment.hxx",
+        "PicoScenes/FrontEndConfigurations.hxx",
+        "PicoScenes/Singleton.hxx",
+        "PicoScenes/CargoSegment.hxx",
+        "PicoScenes/DynamicFieldInterpretation.hxx",
+        "PicoScenes/FIFOWaitBlocker.hxx",
+        "PicoScenes/SDRHardwareInformation.hxx",
+        "PicoScenes/Intrinsics.hxx",
+        "PicoScenes/RXSExtraInfo.hxx",
+        "PicoScenes/BBSignalsFileWriter.hxx",
+        "PicoScenes/DSPRateTracker.hxx",
+        "PicoScenes/AbstractSDRFrontEnd.hxx",
+        "PicoScenes/MAC80211CSIExtractableFrontEnd.hxx",
+    )
+    optional_headers = (
+        "PicoScenes/CSILivePlotter.hxx",
+        "PicoScenes/SoapySDRUtils.hxx",
+    )
+
+    for header in required_headers:
+        cppyy.include(header)
+
+    for header in optional_headers:
+        try:
+            cppyy.include(header)
+        except ImportError:
+            pass
+
+    for name in (
+        "ChannelBandwidthEnum",
+        "LoggingService",
+        "AbstractSDRFrontEnd",
+        "FrontEndModePreset",
+        "PacketFormatEnum",
+        "GuardIntervalEnum",
+        "PicoScenesFrameTxParameters",
+        "MagicIntel123456",
+        "TxPrecodingParameters",
+        "ExtraInfoSegment",
+        "PicoScenesDeviceType",
+        "isIntelMVMTypeNIC",
+        "ChannelCodingEnum",
+        "PayloadDataType",
+        "PayloadSegment",
+        "isSDR",
+        "MAC80211CSIExtractableFrontEnd",
+        "PicoScenesStart",
+        "PicoScenesWait",
+        "PicoScenesStop",
+        "getNIC",
+    ):
+        globals()[name] = getattr(cppyy.gbl, name)
+
+    _export_if_available("CSILivePlotter")
+
+    cppyy.cppdef("""
 #include <cstdint>
 #include <optional>
 #include <PicoScenes/ModularPicoScenesFrame.hxx>
@@ -207,8 +295,75 @@ public:
 
 void setTxParameters(AbstractNIC* nic, PicoScenesFrameTxParameters parameters){
     nic->getUserSpecifiedTxParameters() = parameters;
-}         
+}
 """)
+
+    for name in (
+        "EchoProbeWorkingMode",
+        "EchoProbeInjectionContent",
+        "EchoProbePacketFrameType",
+        "EchoProbeReplyStrategy",
+        "EchoProbeParameters",
+        "setTxParameters",
+    ):
+        globals()[name] = getattr(cppyy.gbl, name)
+
+
+def _require_full_bindings():
+    global _FULL_BINDINGS_ERROR, _FULL_BINDINGS_LOADED
+    if _FULL_BINDINGS_LOADED:
+        return
+
+    try:
+        _load_full_bindings()
+        _FULL_BINDINGS_LOADED = True
+        _FULL_BINDINGS_ERROR = None
+        return
+    except Exception as exc:
+        _FULL_BINDINGS_ERROR = exc
+
+    if _FULL_BINDINGS_ERROR is not None:
+        raise RuntimeError(
+            "Full PicoScenes runtime bindings could not be loaded. "
+            "CSI file parsing is available, but NIC/USRP runtime APIs require "
+            "PicoScenes headers and Boost headers that cppyy can parse. "
+            f"Original error: {_FULL_BINDINGS_ERROR}"
+        ) from _FULL_BINDINGS_ERROR
+
+
+def picoscenes_start(commandString: str = None):
+    _require_full_bindings()
+    proc = subprocess.Popen(
+        ["PicoScenes", "-q"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    PicoScenesStart()
+
+
+def picoscenes_wait():
+    _require_full_bindings()
+    PicoScenesWait()
+
+
+def picoscenes_stop():
+    _require_full_bindings()
+    PicoScenesStop()
+
+
+def getNic(nicName):
+    _require_full_bindings()
+    return getNIC(nicName)
+
+
+if os.environ.get("PYPICOSCENES_CORE_ONLY", "").lower() not in ("1", "true", "yes"):
+    _require_full_bindings()
+
 
 if __name__ == "__main__":
     pass
